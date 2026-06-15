@@ -7,7 +7,7 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "8822824629:AAE2UjWBtu6RjHkrCDuHtctogwWgbEPzUcY"
 
 # ══════════════════════════════════════════════════════════
 # КОНТЕНТ
