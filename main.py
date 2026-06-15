@@ -7,7 +7,11 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 
-BOT_TOKEN = "8822824629:AAE2UjWBtu6RjHkrCDuHtctogwWgbEPzUcY"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = 837618188
+
+# Хранилище пользователей (в памяти, сбрасывается при перезапуске)
+known_users = set()
 
 # ══════════════════════════════════════════════════════════
 # КОНТЕНТ
@@ -84,7 +88,25 @@ def main_keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    name = update.effective_user.first_name
+    user = update.effective_user
+    name = user.first_name
+
+    # Уведомление админу о новом пользователе
+    if user.id not in known_users:
+        known_users.add(user.id)
+        username = f"@{user.username}" if user.username else "нет username"
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"👤 Новый пользователь!\n\n"
+                     f"Имя: {user.first_name} {user.last_name or ''}\n"
+                     f"Username: {username}\n"
+                     f"ID: {user.id}\n\n"
+                     f"Всего пользователей: {len(known_users)}"
+            )
+        except Exception:
+            pass
+
     text = (
         f"Сәлам, {name}! 🌙\n\n"
         "Добро пожаловать в *Татар Уены* — татарскую игру для компании!\n\n"
@@ -292,6 +314,15 @@ async def howto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await query.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text(
+        f"📊 *Статистика бота:*\n\n"
+        f"👥 Всего пользователей: {len(known_users)}",
+        parse_mode="Markdown"
+    )
+
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -305,6 +336,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(start_quiz, pattern="^start_quiz$"))
     app.add_handler(CallbackQueryHandler(start_never, pattern="^start_never$"))
     app.add_handler(CallbackQueryHandler(quiz_answer, pattern="^quiz_answer_"))
