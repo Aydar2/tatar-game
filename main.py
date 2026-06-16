@@ -68,17 +68,19 @@ def generate_questions_gigachat(used_topics=None):
 
     avoid = f"Не повторяй темы: {', '.join(used_topics)}." if used_topics else ""
 
-    prompt = f"""Сгенерируй 7 вопросов викторины о татарской культуре, истории, языке и традициях.
+    prompt = f"""Син татар телен яхшы белгән белем бирү ярдәмчесе.
+Татар мәдәнияте, тарихы, теле һәм традицияләре буенча 7 викторина соравы төзе.
 {avoid}
-Темы: еда, праздники, известные люди, язык, история, география, музыка, спорт.
+Темалар: ризык, бәйрәмнәр, танылган кешеләр, тел, тарих, география, музыка, спорт, әдәбият.
 
-Требования:
-- Все вопросы и варианты на татарском языке
-- Без markdown, без пояснений — только чистый JSON
-- answer — индекс правильного ответа (0, 1, 2 или 3)
+Таләпләр:
+- Барлык текстлар дөрес әдәби татар телендә
+- Markdown юк, аңлатма юк — чиста JSON гына
+- answer — дөрес җавап индексы (0, 1, 2 яки 3)
+- explanation — кыскача аңлатма нигә бу дөрес (татарча, 1-2 җөмлә)
 
-Формат ответа:
-[{{"q":"вопрос?","options":["а","б","в","г"],"answer":0}},{{"q":"вопрос?","options":["а","б","в","г"],"answer":1}}]"""
+JSON формат (башка бернәрсә дә язма):
+[{{"q":"сорау?","options":["а","б","в","г"],"answer":0,"explanation":"Аңлатма татарча."}}]"""
 
     try:
         ctx = ssl.create_default_context()
@@ -386,6 +388,8 @@ async def quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["scores"][name] = session["scores"].get(name, 0) + 1
         quiz_sessions[chat_id] = session
         await query.answer(f"✅ Дөрес! +1 балл, {name}!", show_alert=True)
+        explanation = q.get("explanation", "")
+        expl_text = f"\n\n📖 _{explanation}_" if explanation else ""
         buttons = [[
             InlineKeyboardButton("⏭ Киләсе сорау", callback_data="quiz_next"),
             InlineKeyboardButton("🏠 Меню", callback_data="menu")
@@ -393,7 +397,8 @@ async def quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"✅ *{name}* дөрес җавап бирде!\n\n"
             f"❓ {q['q']}\n\n"
-            f"💡 Җавап: *{q['options'][q['answer']]}*",
+            f"💡 Җавап: *{q['options'][q['answer']]}*"
+            f"{expl_text}",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
