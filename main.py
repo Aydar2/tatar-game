@@ -1,7 +1,11 @@
 import os
 import random
 import json
+import time
+import uuid
 import urllib.request
+import urllib.parse
+import ssl
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -10,13 +14,111 @@ from telegram.ext import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 837618188
+GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY", "")
 
-# Google Sheets ID — замени на свой
-# Формат таблицы: Вопрос | Вариант1 | Вариант2 | Вариант3 | Вариант4 | Правильный(1-4)
 QUIZ_SHEET_ID = os.getenv("QUIZ_SHEET_ID", "")
 EMOJI_SHEET_ID = os.getenv("EMOJI_SHEET_ID", "")
 
 known_users = set()
+
+# ══════════════════════════════════════════════════════════
+# GIGACHAT — ГЕНЕРАЦИЯ ВОПРОСОВ
+# ══════════════════════════════════════════════════════════
+
+gigachat_token = None
+gigachat_token_expires = 0
+
+def get_gigachat_token():
+    """Получает или обновляет Access token"""
+    global gigachat_token, gigachat_token_expires
+    if gigachat_token and time.time() < gigachat_token_expires:
+        return gigachat_token
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        data = urllib.parse.urlencode({"scope": "GIGACHAT_API_PERS"}).encode()
+        req = urllib.request.Request(
+            "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+            data=data,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+                "RqUID": str(uuid.uuid4()),
+                "Authorization": f"Basic {GIGACHAT_AUTH_KEY}",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
+            result = json.loads(r.read().decode())
+        gigachat_token = result["access_token"]
+        gigachat_token_expires = time.time() + 1700  # 28 минут
+        print("✅ GigaChat токен получен")
+        return gigachat_token
+    except Exception as e:
+        print(f"❌ Ошибка получения токена GigaChat: {e}")
+        return None
+
+def generate_questions_gigachat(used_topics=None):
+    """Генерирует 10 уникальных вопросов через GigaChat"""
+    token = get_gigachat_token()
+    if not token:
+        return None
+
+    avoid = f"Не повторяй темы: {', '.join(used_topics)}." if used_topics else ""
+
+    prompt = f"""Сгенерируй 10 вопросов викторины о татарской культуре, истории, языке и традициях.
+{avoid}
+Темы могут быть разные: еда, праздники, известные люди, язык, история, география, музыка, спорт.
+
+Верни ТОЛЬКО JSON массив без пояснений:
+[
+  {{
+    "q": "Вопрос на татарском языке?",
+    "options": ["Вариант1", "Вариант2", "Вариант3", "Вариант4"],
+    "answer": 0
+  }}
+]
+Где answer — индекс правильного ответа (0-3). Все тексты на татарском языке."""
+
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        body = json.dumps({
+            "model": "GigaChat",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.9,
+            "max_tokens": 2000,
+        }).encode()
+
+        req = urllib.request.Request(
+            "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
+            result = json.loads(r.read().decode())
+
+        text = result["choices"][0]["message"]["content"]
+        # Извлекаем JSON из ответа
+        start = text.find("[")
+        end = text.rfind("]") + 1
+        if start == -1 or end == 0:
+            return None
+        questions = json.loads(text[start:end])
+        print(f"✅ GigaChat сгенерировал {len(questions)} вопросов")
+        return questions
+    except Exception as e:
+        print(f"❌ Ошибка генерации вопросов: {e}")
+        return None
 
 # ══════════════════════════════════════════════════════════
 # ЗАГРУЗКА ДАННЫХ ИЗ GOOGLE SHEETS
@@ -167,11 +269,25 @@ async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     chat_id = update.effective_chat.id
 
-    questions = load_quiz_questions()
-    if chat_id not in quiz_sessions:
-        quiz_sessions[chat_id] = {"scores": {}, "used": [], "questions": questions}
+    await query.message.reply_text("⏳ Сораулар әзерләнә...")
+
+    # Пробуем GigaChat, fallback на статику
+    if GIGACHAT_AUTH_KEY:
+        used_topics = quiz_sessions.get(chat_id, {}).get("used_topics", [])
+        questions = generate_questions_gigachat(used_topics)
+        if not questions:
+            questions = load_quiz_questions()
     else:
-        quiz_sessions[chat_id]["questions"] = questions
+        questions = load_quiz_questions()
+
+    prev_scores = quiz_sessions.get(chat_id, {}).get("scores", {})
+    used_topics = quiz_sessions.get(chat_id, {}).get("used_topics", [])
+    quiz_sessions[chat_id] = {
+        "scores": prev_scores,
+        "used": [],
+        "questions": questions,
+        "used_topics": used_topics + [q["q"][:20] for q in questions]
+    }
 
     await send_quiz_question(context, chat_id, query.message)
 
