@@ -86,7 +86,7 @@ def generate_questions_gigachat(used_topics=None):
         ctx.verify_mode = ssl.CERT_NONE
 
         body = json.dumps({
-            "model": "GigaChat",
+            "model": "GigaChat-Max",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
             "max_tokens": 3000,
