@@ -107,15 +107,38 @@ def generate_questions_gigachat(used_topics=None):
 
         text = result["choices"][0]["message"]["content"]
         print(f"📝 GigaChat ответ: {text[:500]}")
-        # Убираем markdown теги ```json ... ```
+        # Убираем markdown теги
         text = text.replace("```json", "").replace("```", "").strip()
         # Извлекаем JSON массив
         start = text.find("[")
         end = text.rfind("]") + 1
         if start == -1 or end == 0:
-            print(f"❌ JSON не найден в ответе")
+            print("❌ JSON не найден в ответе")
             return None
-        questions = json.loads(text[start:end])
+        text = text[start:end]
+        # Чистим кривые кавычки внутри строк
+        import re
+        text = re.sub(r'«|»', '', text)  # убираем ёлочки
+        text = re.sub(r'(?<!")\'(?!")', '', text)  # убираем одиночные кавычки
+        # Обрезаем незакрытый JSON — берём только полные объекты
+        valid_end = text.rfind("},")
+        if valid_end != -1:
+            text = text[:valid_end + 1] + "]"
+        try:
+            questions = json.loads(text)
+        except Exception:
+            # Последняя попытка — парсим по одному объекту
+            questions = []
+            for match in re.finditer(r'\{[^{}]+\}', text):
+                try:
+                    q = json.loads(match.group())
+                    if "q" in q and "options" in q and "answer" in q:
+                        questions.append(q)
+                except Exception:
+                    continue
+        if not questions:
+            print("❌ Ни одного вопроса не распарсилось")
+            return None
         print(f"✅ GigaChat сгенерировал {len(questions)} вопросов")
         return questions
     except Exception as e:
