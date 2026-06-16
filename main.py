@@ -68,20 +68,24 @@ def generate_questions_gigachat(used_topics=None):
 
     avoid = f"Не повторяй темы: {', '.join(used_topics)}." if used_topics else ""
 
-    prompt = f"""Син — татар теле һәм мәдәнияте буенча тирән белемле белгеч.
-Татар мәдәнияте, тарихы, теле һәм традицияләре буенча 7 викторина соравы төз.
+    prompt = f"""Син — татар теле белгече һәм мәдәният тарихчысы. Татар телен камил беләсең.
+
+Татар мәдәнияте, тарихы, теле, традицияләре буенча 10 викторина соравы төз.
 {avoid}
-Темалар: ризык, бәйрәмнәр, танылган кешеләр, тел, тарих, география, музыка, спорт, әдәбият.
 
-Таләпләр:
-- Барлык текстлар саф, дөрес әдәби татар телендә язылсын
-- Сораулар кызыклы, уйландырырлык булсын
-- explanation — дөрес җавап турында өстәмә кызыклы мәгълүмат бир (ни өчен дөрес икәнен түгел, ә бу темага кагылышлы кызыклы факт яки тарих). 1-2 җөмлә, татарча.
-- Markdown юк, аңлатма юк — чиста JSON гына
-- answer — дөрес җавап индексы (0, 1, 2 яки 3)
+ТЕЛ ТАЛӘПЛӘРЕ (бик мөһим!):
+- Саф әдәби татар теле генә кулланыла
+- Дөрес формалар: юк (НЕ йок), күп (НЕ коп), белән (НЕ менән), кеше (НЕ кише), нинди (НЕ ниндый)
+- Башкорт, казах яки рус сүзләре кушмыйча
+- Барлык сүзләр мәгънәле, бер-берсенә туры килергә тиеш
 
-JSON формат (башка бернәрсә дә язма):
-[{{"q":"сорау?","options":["а","б","в","г"],"answer":0,"explanation":"Кызыклы факт яки өстәмә мәгълүмат."}}]"""
+СОРАУ ТАЛӘПЛӘРЕ:
+- Сораулар кызыклы, конкрет, бер дөрес җавабы булсын
+- Дөрес булмаган вариантлар да ышандырырлык булсын
+- explanation: бу темага кагылышлы кызыклы тарихи факт (ни өчен дөрес икәнен кабатламыйча)
+
+Markdown юк. Башка текст юк. Чиста JSON гына:
+[{{"q":"сорау?","options":["а","б","в","г"],"answer":0,"explanation":"Кызыклы факт."}}]"""
 
     try:
         ctx = ssl.create_default_context()
@@ -89,7 +93,7 @@ JSON формат (башка бернәрсә дә язма):
         ctx.verify_mode = ssl.CERT_NONE
 
         body = json.dumps({
-            "model": "GigaChat-Pro",
+            "model": "GigaChat-Max",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
             "max_tokens": 3000,
@@ -300,10 +304,13 @@ async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("⏳ Сораулар әзерләнә...")
 
     prev_scores = quiz_sessions.get(chat_id, {}).get("scores", {})
+    # Берём темы использованных вопросов внутри этого чата
     used_topics = quiz_sessions.get(chat_id, {}).get("used_topics", [])
+    # Если накопилось много тем — оставляем только последние 30 чтобы промпт не разбухал
+    if len(used_topics) > 30:
+        used_topics = used_topics[-30:]
 
     if GIGACHAT_AUTH_KEY:
-        # Всегда генерируем новые вопросы через GigaChat
         questions = generate_questions_gigachat(used_topics)
         if not questions:
             await query.message.reply_text("⚠️ GigaChat җавап бирмәде, кабат яза башла...")
@@ -311,11 +318,14 @@ async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         questions = load_quiz_questions()
 
+    # Добавляем новые темы в историю чата
+    new_topics = used_topics + [q["q"][:30] for q in questions]
+
     quiz_sessions[chat_id] = {
         "scores": prev_scores,
         "used": [],
         "questions": questions,
-        "used_topics": used_topics + [q["q"][:20] for q in questions]
+        "used_topics": new_topics
     }
 
     await send_quiz_question(context, chat_id, query.message)
