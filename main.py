@@ -108,10 +108,12 @@ def generate_questions_gigachat(used_topics=None):
             result = json.loads(r.read().decode())
 
         text = result["choices"][0]["message"]["content"]
+        print(f"📝 GigaChat ответ: {text[:500]}")  # логируем первые 500 символов
         # Извлекаем JSON из ответа
         start = text.find("[")
         end = text.rfind("]") + 1
         if start == -1 or end == 0:
+            print(f"❌ JSON не найден в ответе")
             return None
         questions = json.loads(text[start:end])
         print(f"✅ GigaChat сгенерировал {len(questions)} вопросов")
