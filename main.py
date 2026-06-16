@@ -172,7 +172,7 @@ def gigachat_chat(token, messages, temperature=0.4, max_tokens=4000):
     ctx.verify_mode = ssl.CERT_NONE
 
     body = json.dumps({
-        "model": "GigaChat-Max",
+        "model": "GigaChat",
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
