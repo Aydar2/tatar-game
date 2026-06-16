@@ -1,6 +1,7 @@
 import os
 import random
-import asyncio
+import json
+import urllib.request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -10,65 +11,108 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 837618188
 
-# Хранилище пользователей (в памяти, сбрасывается при перезапуске)
+# Google Sheets ID — замени на свой
+# Формат таблицы: Вопрос | Вариант1 | Вариант2 | Вариант3 | Вариант4 | Правильный(1-4)
+QUIZ_SHEET_ID = os.getenv("QUIZ_SHEET_ID", "")
+EMOJI_SHEET_ID = os.getenv("EMOJI_SHEET_ID", "")
+
 known_users = set()
 
 # ══════════════════════════════════════════════════════════
-# КОНТЕНТ
+# ЗАГРУЗКА ДАННЫХ ИЗ GOOGLE SHEETS
 # ══════════════════════════════════════════════════════════
 
-QUIZ_QUESTIONS = [
-    {"q": "Как называется столица Татарстана?", "options": ["Казань", "Уфа", "Набережные Челны", "Альметьевск"], "answer": 0},
-    {"q": "Что такое чак-чак?", "options": ["Суп", "Сладкое блюдо из теста с мёдом", "Татарский танец", "Музыкальный инструмент"], "answer": 1},
-    {"q": "Как будет 'спасибо' на татарском?", "options": ["Сәлам", "Рәхмәт", "Зинһар", "Әйе"], "answer": 1},
-    {"q": "Какая река протекает через Казань?", "options": ["Ока", "Волга", "Кама", "Белая"], "answer": 1},
-    {"q": "Что такое эчпочмак?", "options": ["Треугольный пирожок с мясом", "Татарская шапка", "Народный праздник", "Музыкант"], "answer": 0},
-    {"q": "Как переводится слово 'Татарстан'?", "options": ["Земля гор", "Страна татар", "Великая степь", "Земля у реки"], "answer": 1},
-    {"q": "Какой праздник татары отмечают после Рамадана?", "options": ["Навруз", "Сабантуй", "Ураза-байрам", "Курбан-байрам"], "answer": 2},
-    {"q": "Что такое Сабантуй?", "options": ["Татарский новый год", "Праздник плуга после посева", "Религиозный пост", "Свадебный обряд"], "answer": 1},
-    {"q": "Как называется татарский национальный головной убор мужчин?", "options": ["Папаха", "Тюбетейка", "Феска", "Малахай"], "answer": 1},
-    {"q": "Кто написал поэму 'Шурале'?", "options": ["Муса Джалиль", "Габдулла Тукай", "Хади Такташ", "Салих Сайдашев"], "answer": 1},
-    {"q": "Что такое губадия?", "options": ["Татарский танец", "Круглый пирог с рисом и сухофруктами", "Народная песня", "Вид вышивки"], "answer": 1},
-    {"q": "На каком языке говорят татары помимо татарского?", "options": ["Башкирский", "Русский", "Казахский", "Турецкий"], "answer": 1},
-    {"q": "Как будет 'привет' на татарском?", "options": ["Рәхмәт", "Хуш", "Сәлам", "Бәхет"], "answer": 2},
-    {"q": "Казанский Кремль входит в список...", "options": ["Чудес света", "Наследия ЮНЕСКО", "Городов-миллионников", "Столиц СНГ"], "answer": 1},
-    {"q": "Что такое бэлеш?", "options": ["Большой пирог с мясом и картофелем", "Татарская колыбельная", "Вид ковра", "Головной убор"], "answer": 0},
-    {"q": "Муса Джалиль — это...", "options": ["Татарский поэт-герой", "Татарский хан", "Архитектор Казани", "Спортсмен"], "answer": 0},
-    {"q": "Как называется татарский кисломолочный напиток?", "options": ["Кумыс", "Катык", "Айран", "Тан"], "answer": 1},
-    {"q": "Что означает слово 'Казань'?", "options": ["Белый город", "Котёл", "Золотой город", "Речной берег"], "answer": 1},
-    {"q": "Какой цвет присутствует на флаге Татарстана?", "options": ["Синий, белый, красный", "Зелёный, белый, красный", "Жёлтый, зелёный, белый", "Зелёный, белый, жёлтый"], "answer": 1},
-    {"q": "Что такое талкыш?", "options": ["Татарская сказка", "Сладкое блюдо из мёда и масла", "Народный инструмент", "Вид вышивки"], "answer": 1},
+def fetch_sheet(sheet_id):
+    """Загружает данные из публичного Google Sheets как CSV"""
+    try:
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            lines = r.read().decode("utf-8").strip().splitlines()
+        rows = []
+        for line in lines[1:]:  # пропускаем заголовок
+            parts = line.split(",")
+            if len(parts) >= 2:
+                rows.append(parts)
+        return rows
+    except Exception as e:
+        print(f"Ошибка загрузки таблицы: {e}")
+        return []
+
+def load_quiz_questions():
+    """Загружает вопросы викторины из Sheets или fallback"""
+    rows = fetch_sheet(QUIZ_SHEET_ID) if QUIZ_SHEET_ID else []
+    if rows:
+        questions = []
+        for row in rows:
+            try:
+                q = {"q": row[0], "options": [row[1], row[2], row[3], row[4]], "answer": int(row[5]) - 1}
+                questions.append(q)
+            except Exception:
+                continue
+        if questions:
+            return questions
+    return FALLBACK_QUIZ
+
+def load_emoji_songs():
+    """Загружает песни из Sheets или fallback"""
+    rows = fetch_sheet(EMOJI_SHEET_ID) if EMOJI_SHEET_ID else []
+    if rows:
+        songs = []
+        for row in rows:
+            try:
+                songs.append({"emoji": row[0], "answer": row[1], "hint": row[2] if len(row) > 2 else ""})
+            except Exception:
+                continue
+        if songs:
+            return songs
+    return FALLBACK_SONGS
+
+# ══════════════════════════════════════════════════════════
+# FALLBACK КОНТЕНТ (если Sheets не подключён)
+# ══════════════════════════════════════════════════════════
+
+FALLBACK_QUIZ = [
+    {"q": "Татарстанның башкаласы кайсы шәһәр?", "options": ["Казан", "Уфа", "Чаллы", "Әлмәт"], "answer": 0},
+    {"q": "Чак-чак нәрсә?", "options": ["Суп", "Бал белән камырдан ясалган татлы", "Татар биюе", "Музыка кораллары"], "answer": 1},
+    {"q": "Татарча 'рәхмәт' нәрсәне аңлата?", "options": ["Сәлам", "Хушлашу", "Рәхмәт", "Зинһар"], "answer": 2},
+    {"q": "Эчпочмак нәрсә?", "options": ["Ит белән өчпочмак пирог", "Татар бүреге", "Халык бәйрәме", "Музыкант"], "answer": 0},
+    {"q": "Сабантуй нәрсә?", "options": ["Татар яңа елы", "Чәчү бәйрәме", "Дини ураза", "Туй йоласы"], "answer": 1},
+    {"q": "Габдулла Тукай кем ул?", "options": ["Татар ханы", "Татар шагыйре", "Казан архитекторы", "Спортчы"], "answer": 1},
+    {"q": "Татар ирләренең милли баш киеме нәрсә?", "options": ["Папаха", "Түбәтәй", "Феска", "Малахай"], "answer": 1},
+    {"q": "Казан Кремле нинди исемлеккә керә?", "options": ["Дөнья могҗизалары", "ЮНЕСКО мирасы", "Миллионлы шәһәрләр", "МДБ башкалалары"], "answer": 1},
+    {"q": "Катык нәрсә?", "options": ["Кымыз", "Кисеткән сөт эчемлеге", "Айран", "Тан"], "answer": 1},
+    {"q": "Муса Җәлил кем ул?", "options": ["Герой шагыйрь", "Татар ханы", "Архитектор", "Спортчы"], "answer": 0},
+    {"q": "Губадия нәрсә?", "options": ["Татар биюе", "Дүгәрәк пирог", "Халык җыры", "Чигү төре"], "answer": 1},
+    {"q": "'Казан' сүзе нәрсәне аңлата?", "options": ["Ак шәһәр", "Казан", "Алтын шәһәр", "Елга ярында"], "answer": 1},
+    {"q": "Татарстан байрагында нинди төсләр бар?", "options": ["Зәңгәр, ак, кызыл", "Яшел, ак, кызыл", "Сары, яшел, ак", "Яшел, ак, сары"], "answer": 1},
+    {"q": "Бәлеш нәрсә?", "options": ["Ит һәм бәрәңге белән зур пирог", "Татар бишек җыры", "Келәм төре", "Баш киеме"], "answer": 0},
+    {"q": "Ураза-байрам нинди бәйрәм?", "options": ["Навруз", "Сабантуй", "Рамазан бетү бәйрәме", "Корбан-байрам"], "answer": 2},
+    {"q": "Талкыш нәрсә?", "options": ["Татар әкияте", "Бал һәм майдан ясалган татлы", "Халык кораллары", "Чигү төре"], "answer": 1},
+    {"q": "Татар теленнән тыш татарлар нинди телдә сөйләшә?", "options": ["Башкорт", "Рус", "Казак", "Төрек"], "answer": 1},
+    {"q": "Татарстанда нинди елга ага?", "options": ["Ока", "Идел", "Кама", "Агыйдел"], "answer": 1},
+    {"q": "'Шүрәле' поэмасын кем язган?", "options": ["Муса Җәлил", "Габдулла Тукай", "Хади Такташ", "Сәлих Сәйдәшев"], "answer": 1},
+    {"q": "Татарстан башкаласында нинди атаклы корылма бар?", "options": ["Кремль", "Эрмитаж", "Большой театр", "Мавзолей"], "answer": 0},
 ]
 
-NEVER_HAVE_I_EVER = [
-    "Я никогда не ел чак-чак прямо руками с блюда на чужой свадьбе 🍯",
-    "Я никогда не притворялся что понимаю татарский, когда бабушка что-то говорила 👂",
-    "Я никогда не засыпал на Сабантуе от жары ☀️",
-    "Я никогда не говорил 'рәхмәт' вместо спасибо в русской компании и не смущался 😄",
-    "Я никогда не называл эчпочмак просто 'треугольником' 🔺",
-    "Я никогда не брал добавку губадии три раза подряд 🥧",
-    "Я никогда не пел татарскую песню не зная слов но делая вид что знаю 🎵",
-    "Я никогда не путал катык со сметаной и не признавался в этом 🥛",
-    "Я никогда не говорил маме что уже поел чтобы не есть суп 🍲",
-    "Я никогда не фотографировал еду у бабушки для инстаграма 📸",
-    "Я никогда не танцевал татарский танец на свадьбе не зная движений 💃",
-    "Я никогда не объяснял иностранцу что такое Татарстан больше 10 минут 🗺️",
-    "Я никогда не выигрывал в борьбе на Сабантуе даже у младшего родственника 💪",
-    "Я никогда не притворялся что мне не жарко в тюбетейке летом 🧢",
-    "Я никогда не пробовал говорить на татарском и переходил на русский через два слова 😅",
-    "Я никогда не называл Казань лучшим городом России в споре с москвичом 🏙️",
-    "Я никогда не ел бэлеш на завтрак, обед и ужин в один день 🥧",
-    "Я никогда не делал вид что знаю все правила курэша (татарской борьбы) 🤼",
-    "Я никогда не говорил гостям что сам приготовил, хотя готовила мама 👩‍🍳",
-    "Я никогда не гордился Казанью как будто сам её построил 🕌",
+FALLBACK_SONGS = [
+    {"emoji": "🌙 + 🏠 + ❤️", "answer": "Туган ягым", "hint": "Туган як турында"},
+    {"emoji": "🌸 + 💃 + 🎵", "answer": "Апипа", "hint": "Татар халык биюе"},
+    {"emoji": "🌊 + 🚣 + 😢", "answer": "Идел буйлап", "hint": "Идел елгасы турында"},
+    {"emoji": "❤️ + 👧 + 🌹", "answer": "Гөлҗамал", "hint": "Кыз исеме"},
+    {"emoji": "⭐ + 🌙 + 🎶", "answer": "Йолдызлы төн", "hint": "Кичке күк турында"},
+    {"emoji": "🏡 + 👴 + 🌿", "answer": "Авылым", "hint": "Татар авылы турында"},
+    {"emoji": "🦅 + 🌅 + 🕊️", "answer": "Ирек кошы", "hint": "Иреклек турында"},
+    {"emoji": "💐 + 🌞 + 😊", "answer": "Бәхет", "hint": "Шатлык турында"},
+    {"emoji": "🎪 + 🤼 + ☀️", "answer": "Сабантуй", "hint": "Татар бәйрәме"},
+    {"emoji": "👰 + 💍 + 🎉", "answer": "Туй моңы", "hint": "Туй җыры"},
 ]
 
 # ══════════════════════════════════════════════════════════
 # СОСТОЯНИЕ ИГР
 # ══════════════════════════════════════════════════════════
 
-quiz_sessions = {}   # chat_id -> {question, scores, used_questions, msg_id}
-never_sessions = {}  # chat_id -> {statements, current_index, players}
+quiz_sessions = {}
+emoji_sessions = {}
 
 # ══════════════════════════════════════════════════════════
 # КЛАВИАТУРЫ
@@ -77,9 +121,9 @@ never_sessions = {}  # chat_id -> {statements, current_index, players}
 def main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🧠 Викторина", callback_data="start_quiz"),
-         InlineKeyboardButton("😄 Я никогда не...", callback_data="start_never")],
-        [InlineKeyboardButton("🏆 Счёт", callback_data="scores"),
-         InlineKeyboardButton("ℹ️ Как играть", callback_data="howto")],
+         InlineKeyboardButton("🎵 Җырны тап", callback_data="start_emoji")],
+        [InlineKeyboardButton("🏆 Нәтиҗәләр", callback_data="scores"),
+         InlineKeyboardButton("ℹ️ Ничек уйнарга", callback_data="howto")],
     ])
 
 # ══════════════════════════════════════════════════════════
@@ -87,32 +131,30 @@ def main_keyboard():
 # ══════════════════════════════════════════════════════════
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
     user = update.effective_user
     name = user.first_name
 
-    # Уведомление админу о новом пользователе
     if user.id not in known_users:
         known_users.add(user.id)
-        username = f"@{user.username}" if user.username else "нет username"
+        username = f"@{user.username}" if user.username else "username юк"
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"👤 Новый пользователь!\n\n"
-                     f"Имя: {user.first_name} {user.last_name or ''}\n"
+                text=f"👤 Яңа кулланучы!\n\n"
+                     f"Исем: {user.first_name} {user.last_name or ''}\n"
                      f"Username: {username}\n"
                      f"ID: {user.id}\n\n"
-                     f"Всего пользователей: {len(known_users)}"
+                     f"Барлыгы: {len(known_users)} кулланучы"
             )
         except Exception:
             pass
 
     text = (
         f"Сәлам, {name}! 🌙\n\n"
-        "Добро пожаловать в *Татар Уены* — татарскую игру для компании!\n\n"
-        "🧠 *Викторина* — вопросы про татарскую культуру. Кто первый ответит — получает очко!\n\n"
-        "😄 *Я никогда не...* — классическая игра с татарским колоритом. Узнай кто из друзей самый настоящий татарин!\n\n"
-        "Позови друзей в чат и начинайте 👇"
+        "*Татар Уены* — дуслар өчен уен ботына хуш килдегез!\n\n"
+        "🧠 *Викторина* — татар мәдәнияте буенча сораулар. Беренче дөрес җавап биргән — җиңүче!\n\n"
+        "🎵 *Җырны тап* — эмодзи буенча татар җырын таб. Кем тизрәк?\n\n"
+        "Дусларыңны чакыр һәм уйный башла 👇"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
@@ -125,37 +167,42 @@ async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     chat_id = update.effective_chat.id
 
+    questions = load_quiz_questions()
     if chat_id not in quiz_sessions:
-        quiz_sessions[chat_id] = {"scores": {}, "used": []}
+        quiz_sessions[chat_id] = {"scores": {}, "used": [], "questions": questions}
+    else:
+        quiz_sessions[chat_id]["questions"] = questions
 
     await send_quiz_question(context, chat_id, query.message)
 
 async def send_quiz_question(context, chat_id, message=None):
-    session = quiz_sessions.get(chat_id, {"scores": {}, "used": []})
-    available = [i for i in range(len(QUIZ_QUESTIONS)) if i not in session["used"]]
+    session = quiz_sessions.get(chat_id, {"scores": {}, "used": [], "questions": FALLBACK_QUIZ})
+    questions = session.get("questions", FALLBACK_QUIZ)
+    available = [i for i in range(len(questions)) if i not in session["used"]]
 
     if not available:
-        # Все вопросы использованы — показываем итог
         scores = session["scores"]
         if scores:
             ranking = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            result = "🏆 *Игра окончена! Результаты:*\n\n"
+            result = "🏆 *Уен бетте! Нәтиҗәләр:*\n\n"
             medals = ["🥇", "🥈", "🥉"]
             for i, (name, score) in enumerate(ranking):
                 medal = medals[i] if i < 3 else f"{i+1}."
-                result += f"{medal} {name} — {score} очков\n"
+                result += f"{medal} {name} — {score} балл\n"
         else:
-            result = "Никто не ответил правильно 😅"
+            result = "Беркем дә дөрес җавап бирмәде 😅"
 
-        quiz_sessions[chat_id] = {"scores": {}, "used": []}
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Играть снова", callback_data="start_quiz"),
-                                    InlineKeyboardButton("🏠 Меню", callback_data="menu")]])
+        quiz_sessions[chat_id] = {"scores": {}, "used": [], "questions": questions}
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Яңадан уйна", callback_data="start_quiz"),
+            InlineKeyboardButton("🏠 Меню", callback_data="menu")
+        ]])
         if message:
             await message.reply_text(result, parse_mode="Markdown", reply_markup=kb)
         return
 
     idx = random.choice(available)
-    q = QUIZ_QUESTIONS[idx]
+    q = questions[idx]
     session["used"].append(idx)
     session["current"] = idx
     session["answered"] = False
@@ -164,9 +211,9 @@ async def send_quiz_question(context, chat_id, message=None):
     buttons = []
     for i, opt in enumerate(q["options"]):
         buttons.append([InlineKeyboardButton(opt, callback_data=f"quiz_answer_{i}")])
-    buttons.append([InlineKeyboardButton("⏭ Следующий вопрос", callback_data="quiz_next")])
+    buttons.append([InlineKeyboardButton("⏭ Киләсе сорау", callback_data="quiz_next")])
 
-    text = f"❓ *Вопрос {len(session['used'])}/{len(QUIZ_QUESTIONS)}*\n\n{q['q']}"
+    text = f"❓ *Сорау {len(session['used'])}/{len(questions)}*\n\n{q['q']}"
     if message:
         await message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -178,29 +225,31 @@ async def quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = quiz_sessions.get(chat_id)
     if not session or session.get("answered"):
-        await query.answer("Уже ответили на этот вопрос!", show_alert=True)
+        await query.answer("Бу сорауга инде җавап бирделәр!", show_alert=True)
         return
 
-    q = QUIZ_QUESTIONS[session["current"]]
+    questions = session.get("questions", FALLBACK_QUIZ)
+    q = questions[session["current"]]
     name = user.first_name
 
     if answer_idx == q["answer"]:
         session["answered"] = True
         session["scores"][name] = session["scores"].get(name, 0) + 1
         quiz_sessions[chat_id] = session
-        await query.answer(f"✅ Правильно! +1 очко, {name}!", show_alert=True)
-
-        buttons = [[InlineKeyboardButton("⏭ Следующий вопрос", callback_data="quiz_next"),
-                    InlineKeyboardButton("🏠 Меню", callback_data="menu")]]
+        await query.answer(f"✅ Дөрес! +1 балл, {name}!", show_alert=True)
+        buttons = [[
+            InlineKeyboardButton("⏭ Киләсе сорау", callback_data="quiz_next"),
+            InlineKeyboardButton("🏠 Меню", callback_data="menu")
+        ]]
         await query.edit_message_text(
-            f"✅ *{name}* ответил правильно!\n\n"
+            f"✅ *{name}* дөрес җавап бирде!\n\n"
             f"❓ {q['q']}\n\n"
-            f"💡 Ответ: *{q['options'][q['answer']]}*",
+            f"💡 Җавап: *{q['options'][q['answer']]}*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
     else:
-        await query.answer("❌ Неправильно, попробуй ещё!", show_alert=True)
+        await query.answer("❌ Дөрес түгел, тагын уйла!", show_alert=True)
 
 async def quiz_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -209,71 +258,126 @@ async def quiz_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_quiz_question(context, chat_id, query.message)
 
 # ══════════════════════════════════════════════════════════
-# Я НИКОГДА НЕ
+# УГАДАЙ ПЕСНЮ ПО ЭМОДЗИ
 # ══════════════════════════════════════════════════════════
 
-async def start_never(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chat_id = update.effective_chat.id
 
-    statements = random.sample(NEVER_HAVE_I_EVER, len(NEVER_HAVE_I_EVER))
-    never_sessions[chat_id] = {"statements": statements, "index": 0}
+    songs = load_emoji_songs()
+    shuffled = random.sample(songs, len(songs))
+    emoji_sessions[chat_id] = {"songs": shuffled, "index": 0, "scores": {}}
 
-    await send_never_statement(query.message, chat_id)
+    await send_emoji_song(query.message, chat_id)
 
-async def send_never_statement(message, chat_id):
-    session = never_sessions.get(chat_id)
+async def send_emoji_song(message, chat_id):
+    session = emoji_sessions.get(chat_id)
     if not session:
         return
 
     idx = session["index"]
-    statements = session["statements"]
+    songs = session["songs"]
 
-    if idx >= len(statements):
-        never_sessions.pop(chat_id, None)
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Играть снова", callback_data="start_never"),
-                                    InlineKeyboardButton("🏠 Меню", callback_data="menu")]])
-        await message.reply_text("😄 *Вот и всё! Надеемся было весело!*\n\nТеперь вы знаете друг друга лучше 😏",
-                                  parse_mode="Markdown", reply_markup=kb)
+    if idx >= len(songs):
+        scores = session["scores"]
+        if scores:
+            ranking = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            result = "🏆 *Уен бетте! Нәтиҗәләр:*\n\n"
+            medals = ["🥇", "🥈", "🥉"]
+            for i, (name, score) in enumerate(ranking):
+                medal = medals[i] if i < 3 else f"{i+1}."
+                result += f"{medal} {name} — {score} балл\n"
+        else:
+            result = "Беркем дә таба алмады 😅"
+
+        emoji_sessions.pop(chat_id, None)
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Яңадан", callback_data="start_emoji"),
+            InlineKeyboardButton("🏠 Меню", callback_data="menu")
+        ]])
+        await message.reply_text(result, parse_mode="Markdown", reply_markup=kb)
         return
 
-    stmt = statements[idx]
-    num = idx + 1
-    total = len(statements)
+    song = songs[idx]
+    session["answered"] = False
+    session["current_answer"] = song["answer"].lower().strip()
+    emoji_sessions[chat_id] = session
 
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✋ Делал!", callback_data="never_did"),
-         InlineKeyboardButton("😇 Не делал", callback_data="never_nodid")],
-        [InlineKeyboardButton("⏭ Следующее", callback_data="never_next")],
+        [InlineKeyboardButton("💡 Ым", callback_data="emoji_hint"),
+         InlineKeyboardButton("⏭ Киләсе", callback_data="emoji_next")]
     ])
 
     await message.reply_text(
-        f"😄 *Я никогда не... ({num}/{total})*\n\n{stmt}\n\n_Нажмите ✋ если делали!_",
-        parse_mode="Markdown", reply_markup=kb
+        f"🎵 *Җырны тап! ({idx+1}/{len(songs)})*\n\n"
+        f"*{song['emoji']}*\n\n"
+        f"_Татарча яз_ 👇",
+        parse_mode="Markdown",
+        reply_markup=kb
     )
 
-async def never_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user = update.effective_user
-    did = query.data == "never_did"
-
-    if did:
-        await query.answer(f"😂 {user.first_name} делал это!", show_alert=True)
-    else:
-        await query.answer(f"😇 {user.first_name} не делал!", show_alert=True)
-
-async def never_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def emoji_hint(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chat_id = update.effective_chat.id
+    session = emoji_sessions.get(chat_id)
+    if not session:
+        return
+    song = session["songs"][session["index"]]
+    hint = song.get("hint", "Ым юк")
+    await query.message.reply_text(f"💡 Ым: _{hint}_", parse_mode="Markdown")
 
-    session = never_sessions.get(chat_id)
+async def emoji_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chat_id = update.effective_chat.id
+    session = emoji_sessions.get(chat_id)
     if session:
+        song = session["songs"][session["index"]]
         session["index"] += 1
-        never_sessions[chat_id] = session
+        emoji_sessions[chat_id] = session
+        await query.message.reply_text(f"⏭ Дөрес җавап: *{song['answer']}*", parse_mode="Markdown")
+    await send_emoji_song(query.message, chat_id)
 
-    await send_never_statement(query.message, chat_id)
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет ответы на угадай песню"""
+    chat_id = update.effective_chat.id
+    session = emoji_sessions.get(chat_id)
+
+    if not session or session.get("answered"):
+        return
+
+    user_answer = update.message.text.lower().strip()
+    correct = session.get("current_answer", "")
+    user = update.effective_user
+    name = user.first_name
+
+    if user_answer == correct or correct in user_answer or user_answer in correct:
+        session["answered"] = True
+        session["scores"][name] = session["scores"].get(name, 0) + 1
+        session["index"] += 1
+        emoji_sessions[chat_id] = session
+
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⏭ Киләсе", callback_data="emoji_next_after"),
+            InlineKeyboardButton("🏠 Меню", callback_data="menu")
+        ]])
+        await update.message.reply_text(
+            f"✅ *{name}* тапты! +1 балл 🎉\n\n"
+            f"Дөрес: *{session['songs'][session['index']-1]['answer']}*",
+            parse_mode="Markdown",
+            reply_markup=kb
+        )
+    else:
+        await update.message.reply_text("❌ Дөрес түгел, тагын уйла!")
+
+async def emoji_next_after(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chat_id = update.effective_chat.id
+    await send_emoji_song(query.message, chat_id)
 
 # ══════════════════════════════════════════════════════════
 # ПРОЧЕЕ
@@ -284,18 +388,23 @@ async def show_scores(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     chat_id = update.effective_chat.id
 
-    session = quiz_sessions.get(chat_id)
-    if not session or not session.get("scores"):
-        await query.message.reply_text("Пока нет очков! Начните викторину 🧠", reply_markup=main_keyboard())
+    quiz_scores = quiz_sessions.get(chat_id, {}).get("scores", {})
+    emoji_scores = emoji_sessions.get(chat_id, {}).get("scores", {})
+
+    all_scores = {}
+    for name, score in {**quiz_scores, **emoji_scores}.items():
+        all_scores[name] = all_scores.get(name, 0) + score
+
+    if not all_scores:
+        await query.message.reply_text("Әле баллар юк! Уен башла 🎮", reply_markup=main_keyboard())
         return
 
-    scores = session["scores"]
-    ranking = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    ranking = sorted(all_scores.items(), key=lambda x: x[1], reverse=True)
     medals = ["🥇", "🥈", "🥉"]
-    text = "🏆 *Текущий счёт:*\n\n"
+    text = "🏆 *Хәзерге хисап:*\n\n"
     for i, (name, score) in enumerate(ranking):
         medal = medals[i] if i < 3 else f"{i+1}."
-        text += f"{medal} {name} — {score} очков\n"
+        text += f"{medal} {name} — {score} балл\n"
 
     await query.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
@@ -303,14 +412,14 @@ async def howto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "ℹ️ *Как играть:*\n\n"
-        "1️⃣ Добавь бота в групповой чат с друзьями\n"
-        "2️⃣ Нажми /start\n\n"
+        "ℹ️ *Ничек уйнарга:*\n\n"
+        "1️⃣ Ботны дуслар белән группага өсти\n"
+        "2️⃣ /start яз\n\n"
         "🧠 *Викторина:*\n"
-        "Бот задаёт вопрос — кто первый нажмёт правильный ответ, получает очко. Побеждает тот, у кого больше очков!\n\n"
-        "😄 *Я никогда не...:*\n"
-        "Бот читает фразу — нажимайте ✋ если делали это. Смейтесь над друзьями!\n\n"
-        "Зовите всех и начинайте! 🎉"
+        "Бот сорау бирә — беренче дөрес басканга балл!\n\n"
+        "🎵 *Җырны тап:*\n"
+        "Эмодзи буенча татар җырын тап — татарча яз!\n\n"
+        "Барысын чакыр! 🎉"
     )
     await query.message.reply_text(text, parse_mode="Markdown", reply_markup=main_keyboard())
 
@@ -318,15 +427,15 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     await update.message.reply_text(
-        f"📊 *Статистика бота:*\n\n"
-        f"👥 Всего пользователей: {len(known_users)}",
+        f"📊 *Статистика:*\n\n"
+        f"👥 Кулланучылар саны: {len(known_users)}",
         parse_mode="Markdown"
     )
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.message.reply_text("Главное меню 👇", reply_markup=main_keyboard())
+    await query.message.reply_text("Баш меню 👇", reply_markup=main_keyboard())
 
 # ══════════════════════════════════════════════════════════
 # ЗАПУСК
@@ -338,16 +447,18 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(start_quiz, pattern="^start_quiz$"))
-    app.add_handler(CallbackQueryHandler(start_never, pattern="^start_never$"))
+    app.add_handler(CallbackQueryHandler(start_emoji, pattern="^start_emoji$"))
     app.add_handler(CallbackQueryHandler(quiz_answer, pattern="^quiz_answer_"))
     app.add_handler(CallbackQueryHandler(quiz_next, pattern="^quiz_next$"))
-    app.add_handler(CallbackQueryHandler(never_reaction, pattern="^never_(did|nodid)$"))
-    app.add_handler(CallbackQueryHandler(never_next, pattern="^never_next$"))
+    app.add_handler(CallbackQueryHandler(emoji_hint, pattern="^emoji_hint$"))
+    app.add_handler(CallbackQueryHandler(emoji_next, pattern="^emoji_next$"))
+    app.add_handler(CallbackQueryHandler(emoji_next_after, pattern="^emoji_next_after$"))
     app.add_handler(CallbackQueryHandler(show_scores, pattern="^scores$"))
     app.add_handler(CallbackQueryHandler(howto, pattern="^howto$"))
     app.add_handler(CallbackQueryHandler(menu, pattern="^menu$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("🎮 Татар Уены бот запущен!")
+    print("🎮 Татар Уены запущен!")
     app.run_polling()
 
 if __name__ == "__main__":
