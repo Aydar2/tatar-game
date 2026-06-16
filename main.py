@@ -60,6 +60,69 @@ def get_gigachat_token():
         print(f"❌ Ошибка получения токена GigaChat: {e}")
         return None
 
+QUIZ_QUESTION_COUNT = 10
+
+
+def parse_gigachat_questions(raw_text):
+    """Парсит JSON-массив вопросов из ответа GigaChat."""
+    import re
+
+    text = raw_text.replace("```json", "").replace("```", "").strip()
+    start = text.find("[")
+    end = text.rfind("]") + 1
+    if start == -1 or end == 0:
+        return []
+
+    text = text[start:end]
+    text = re.sub(r'«|»', '', text)
+
+    try:
+        questions = json.loads(text)
+        if isinstance(questions, list):
+            return [q for q in questions if _is_valid_question(q)]
+    except json.JSONDecodeError:
+        pass
+
+    questions = []
+    depth = 0
+    obj_start = None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and obj_start is not None:
+                try:
+                    q = json.loads(text[obj_start:i + 1])
+                    if _is_valid_question(q):
+                        questions.append(q)
+                except json.JSONDecodeError:
+                    pass
+                obj_start = None
+    return questions
+
+
+def _is_valid_question(q):
+    return (
+        isinstance(q, dict)
+        and q.get("q")
+        and isinstance(q.get("options"), list)
+        and len(q["options"]) >= 2
+        and isinstance(q.get("answer"), int)
+        and 0 <= q["answer"] < len(q["options"])
+    )
+
+
+def pick_quiz_questions(questions):
+    """Возвращает ровно QUIZ_QUESTION_COUNT валидных вопросов."""
+    valid = [q for q in questions if _is_valid_question(q)]
+    if len(valid) <= QUIZ_QUESTION_COUNT:
+        return valid[:QUIZ_QUESTION_COUNT]
+    return random.sample(valid, QUIZ_QUESTION_COUNT)
+
+
 def generate_questions_gigachat(used_topics=None):
     """Генерирует 10 уникальных вопросов через GigaChat"""
     token = get_gigachat_token()
@@ -70,7 +133,7 @@ def generate_questions_gigachat(used_topics=None):
 
     prompt = f"""Син — татар теле белгече һәм татар мәдәнияте тарихчысы. Татар телен камил беләсең.
 
-Татар мәдәнияте, тарихы, теле, традицияләре буенча ТАМ ТУЛЫ 10 викторина соравы төз.
+Татар мәдәнияте, тарихы, теле, традицияләре буенча ТАМ ТУЛЫ {QUIZ_QUESTION_COUNT} викторина соравы төз.
 {avoid}
 
 КАТГЫЙ ТЫЮЛАР:
@@ -84,11 +147,11 @@ def generate_questions_gigachat(used_topics=None):
 - Барлык сүзләр дөрес татарча, мәгънәле, бер-берсенә туры килгән
 
 СОРАУ ТАЛӘПЛӘРЕ:
-- Нәкъ 10 сорау — азрак түгел!
+- Нәкъ {QUIZ_QUESTION_COUNT} сорау — азрак түгел, күпрәк түгел!
 - Сораулар конкрет, бер генә дөрес җавабы булсын
 - explanation: бу шәхес/вакыйга/күренеш турында кызыклы тарихи факт (ни өчен дөрес икәнен кабатламый)
 
-Markdown юк. Башка текст юк. Чиста JSON гына, нәкъ 10 объект:
+Markdown юк. Башка текст юк. Чиста JSON гына, массив из ровно {QUIZ_QUESTION_COUNT} объектов:
 [{{"q":"сорау?","options":["а","б","в","г"],"answer":0,"explanation":"Кызыклы факт."}}]"""
 
     try:
@@ -118,40 +181,25 @@ Markdown юк. Башка текст юк. Чиста JSON гына, нәкъ 10
 
         text = result["choices"][0]["message"]["content"]
         print(f"📝 GigaChat ответ: {text[:500]}")
-        # Убираем markdown теги
-        text = text.replace("```json", "").replace("```", "").strip()
-        # Извлекаем JSON массив
-        start = text.find("[")
-        end = text.rfind("]") + 1
-        if start == -1 or end == 0:
-            print("❌ JSON не найден в ответе")
-            return None
-        text = text[start:end]
-        # Чистим кривые кавычки внутри строк
-        import re
-        text = re.sub(r'«|»', '', text)  # убираем ёлочки
-        text = re.sub(r'(?<!")\'(?!")', '', text)  # убираем одиночные кавычки
-        # Обрезаем незакрытый JSON — берём только полные объекты
-        valid_end = text.rfind("},")
-        if valid_end != -1:
-            text = text[:valid_end + 1] + "]"
-        try:
-            questions = json.loads(text)
-        except Exception:
-            # Последняя попытка — парсим по одному объекту
-            questions = []
-            for match in re.finditer(r'\{[^{}]+\}', text):
-                try:
-                    q = json.loads(match.group())
-                    if "q" in q and "options" in q and "answer" in q:
-                        questions.append(q)
-                except Exception:
-                    continue
+        questions = parse_gigachat_questions(text)
         if not questions:
             print("❌ Ни одного вопроса не распарсилось")
             return None
+
+        if len(questions) > QUIZ_QUESTION_COUNT:
+            questions = questions[:QUIZ_QUESTION_COUNT]
+        elif len(questions) < QUIZ_QUESTION_COUNT:
+            print(f"⚠️ GigaChat вернул {len(questions)} вопросов, добираем до {QUIZ_QUESTION_COUNT}")
+            existing = {q["q"] for q in questions}
+            extras = [q for q in FALLBACK_QUIZ if q["q"] not in existing]
+            random.shuffle(extras)
+            for q in extras:
+                if len(questions) >= QUIZ_QUESTION_COUNT:
+                    break
+                questions.append(q)
+
         print(f"✅ GigaChat сгенерировал {len(questions)} вопросов")
-        return questions
+        return questions[:QUIZ_QUESTION_COUNT]
     except Exception as e:
         print(f"❌ Ошибка генерации вопросов: {e}")
         return None
@@ -318,9 +366,9 @@ async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         questions = generate_questions_gigachat(used_topics)
         if not questions:
             await query.message.reply_text("⚠️ GigaChat җавап бирмәде, кабат яза башла...")
-            questions = FALLBACK_QUIZ
+            questions = pick_quiz_questions(FALLBACK_QUIZ)
     else:
-        questions = load_quiz_questions()
+        questions = pick_quiz_questions(load_quiz_questions())
 
     # Добавляем новые темы в историю чата
     new_topics = used_topics + [q["q"][:30] for q in questions]
