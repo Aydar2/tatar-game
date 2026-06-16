@@ -68,19 +68,17 @@ def generate_questions_gigachat(used_topics=None):
 
     avoid = f"Не повторяй темы: {', '.join(used_topics)}." if used_topics else ""
 
-    prompt = f"""Сгенерируй 10 вопросов викторины о татарской культуре, истории, языке и традициях.
+    prompt = f"""Сгенерируй 7 вопросов викторины о татарской культуре, истории, языке и традициях.
 {avoid}
-Темы могут быть разные: еда, праздники, известные люди, язык, история, география, музыка, спорт.
+Темы: еда, праздники, известные люди, язык, история, география, музыка, спорт.
 
-Верни ТОЛЬКО JSON массив без пояснений:
-[
-  {{
-    "q": "Вопрос на татарском языке?",
-    "options": ["Вариант1", "Вариант2", "Вариант3", "Вариант4"],
-    "answer": 0
-  }}
-]
-Где answer — индекс правильного ответа (0-3). Все тексты на татарском языке."""
+Требования:
+- Все вопросы и варианты на татарском языке
+- Без markdown, без пояснений — только чистый JSON
+- answer — индекс правильного ответа (0, 1, 2 или 3)
+
+Формат ответа:
+[{{"q":"вопрос?","options":["а","б","в","г"],"answer":0}},{{"q":"вопрос?","options":["а","б","в","г"],"answer":1}}]"""
 
     try:
         ctx = ssl.create_default_context()
@@ -90,8 +88,8 @@ def generate_questions_gigachat(used_topics=None):
         body = json.dumps({
             "model": "GigaChat",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.9,
-            "max_tokens": 2000,
+            "temperature": 0.7,
+            "max_tokens": 3000,
         }).encode()
 
         req = urllib.request.Request(
@@ -108,8 +106,10 @@ def generate_questions_gigachat(used_topics=None):
             result = json.loads(r.read().decode())
 
         text = result["choices"][0]["message"]["content"]
-        print(f"📝 GigaChat ответ: {text[:500]}")  # логируем первые 500 символов
-        # Извлекаем JSON из ответа
+        print(f"📝 GigaChat ответ: {text[:500]}")
+        # Убираем markdown теги ```json ... ```
+        text = text.replace("```json", "").replace("```", "").strip()
+        # Извлекаем JSON массив
         start = text.find("[")
         end = text.rfind("]") + 1
         if start == -1 or end == 0:
