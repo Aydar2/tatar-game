@@ -89,7 +89,7 @@ JSON формат (башка бернәрсә дә язма):
         ctx.verify_mode = ssl.CERT_NONE
 
         body = json.dumps({
-            "model": "GigaChat-Max",
+            "model": "GigaChat-Pro",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
             "max_tokens": 3000,
