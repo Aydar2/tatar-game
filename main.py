@@ -271,17 +271,18 @@ async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.message.reply_text("⏳ Сораулар әзерләнә...")
 
-    # Пробуем GigaChat, fallback на статику
+    prev_scores = quiz_sessions.get(chat_id, {}).get("scores", {})
+    used_topics = quiz_sessions.get(chat_id, {}).get("used_topics", [])
+
     if GIGACHAT_AUTH_KEY:
-        used_topics = quiz_sessions.get(chat_id, {}).get("used_topics", [])
+        # Всегда генерируем новые вопросы через GigaChat
         questions = generate_questions_gigachat(used_topics)
         if not questions:
-            questions = load_quiz_questions()
+            await query.message.reply_text("⚠️ GigaChat җавап бирмәде, кабат яза башла...")
+            questions = FALLBACK_QUIZ
     else:
         questions = load_quiz_questions()
 
-    prev_scores = quiz_sessions.get(chat_id, {}).get("scores", {})
-    used_topics = quiz_sessions.get(chat_id, {}).get("used_topics", [])
     quiz_sessions[chat_id] = {
         "scores": prev_scores,
         "used": [],
@@ -308,7 +309,14 @@ async def send_quiz_question(context, chat_id, message=None):
         else:
             result = "Беркем дә дөрес җавап бирмәде 😅"
 
-        quiz_sessions[chat_id] = {"scores": {}, "used": [], "questions": questions}
+        # Сохраняем счёт и историю тем, сбрасываем только вопросы
+        used_topics = session.get("used_topics", [])
+        quiz_sessions[chat_id] = {
+            "scores": scores,
+            "used": [],
+            "questions": [],
+            "used_topics": used_topics
+        }
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("🔄 Яңадан уйна", callback_data="start_quiz"),
             InlineKeyboardButton("🏠 Меню", callback_data="menu")
